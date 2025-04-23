@@ -1,6 +1,59 @@
 version: "3.8"
 services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: proxystore
+    ports:
+      - "5432:5432"
+    volumes:
+      - "./_sql/:/docker-entrypoint-initdb.d/"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d proxystore"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    networks:
+      - internal
   proxy:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
     ports:
       - "8081:8081"
+    environment:
+        - DATABASE_PORT=5432
+        - DATABASE_USER=admin
+        - DATABASE_PASSWORD=mypassword
+        - DATABASE_NAME=proxystore
+        - DATABASE_HOST=db 
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+  
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+     - "8000:8000"
+    environment:
+        - DATABASE_PORT=5432
+        - DATABASE_USER=admin
+        - DATABASE_PASSWORD=mypassword
+        - DATABASE_NAME=proxystore
+        - DATABASE_HOST=db 
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge

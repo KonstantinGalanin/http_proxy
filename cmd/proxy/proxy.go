@@ -3,12 +3,29 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
+	"database/sql"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
+
+	_ "github.com/lib/pq"
+
+	"github.com/KonstantinGalanin/http_proxy/internal/proxy"
+	"github.com/KonstantinGalanin/http_proxy/internal/repository"
+)
+
+var (
+	dbHost = os.Getenv("DATABASE_HOST")
+	dbPort = os.Getenv("DATABASE_PORT")
+	dbUser = os.Getenv("DATABASE_USER")
+	dbPass = os.Getenv("DATABASE_PASSWORD")
+	dbName = os.Getenv("DATABASE_NAME")
+
+	serverPort = os.Getenv("SERVER_PORT")
 )
 
 func modifyRequest(r *http.Request) {
@@ -29,6 +46,7 @@ func modifyRequest(r *http.Request) {
 func handleHTTP(w http.ResponseWriter, r *http.Request) {
 	modifyRequest(r)
 
+	fmt.Println(r)
 	fmt.Println(r)
 
 	target := r.URL.Host
@@ -122,6 +140,19 @@ func transfer(destination io.WriteCloser, source io.ReadCloser) {
 }
 
 func main() {
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", dbHost, dbPort, dbUser, dbPass, dbName)
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+
+	if err := db.Ping(); err != nil {
+		panic(err)
+	}
+
+	repository := repository.New(db)
+
 	server := &http.Server{
 		Addr: ":8081",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,6 +161,18 @@ func main() {
 			} else {
 				handleHTTP(w, r)
 			}
+
+			parsedReq, err := proxy.ParseRequest(r)
+			if err != nil {
+				fmt.Println(1)
+				log.Println("failed parse request: %w", err)
+			}
+			err = repository.SaveRequest(parsedReq)
+			if err != nil {
+				fmt.Println(2)
+				log.Println("failed save request: %w", err)
+			}
+			fmt.Println(3, parsedReq)
 		}),
 	}
 
