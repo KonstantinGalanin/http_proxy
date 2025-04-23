@@ -18,6 +18,10 @@ import (
 	"github.com/KonstantinGalanin/http_proxy/internal/repository"
 )
 
+type ProxyServer struct {
+	repository *repository.PostgresRepo
+}
+
 var (
 	dbHost = os.Getenv("DATABASE_HOST")
 	dbPort = os.Getenv("DATABASE_PORT")
@@ -43,11 +47,8 @@ func modifyRequest(r *http.Request) {
 	r.Header.Del("Proxy-Connection")
 }
 
-func handleHTTP(w http.ResponseWriter, r *http.Request) {
+func (p *ProxyServer) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	modifyRequest(r)
-
-	fmt.Println(r)
-	fmt.Println(r)
 
 	target := r.URL.Host
 	if target == "" {
@@ -78,6 +79,13 @@ func handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusServiceUnavailable)
+        return
+    }
+
 	for k, vv := range resp.Header {
 		for _, v := range vv {
 			w.Header().Add(k, v)
@@ -86,14 +94,28 @@ func handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(resp.StatusCode)
 
-	_, err = io.Copy(w, resp.Body)
+	_, err = w.Write(bodyBytes)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+
+	parsedResp := &proxy.ParsedResponse{
+        StatusCode:    resp.StatusCode,
+        Status:        resp.Status,
+        Headers:       resp.Header,
+        Body:          string(bodyBytes),
+        ContentLength: resp.ContentLength,
+        Compressed:    resp.Header.Get("Content-Encoding") == "gzip",
+    }
+    
+    err = p.repository.SaveResponse(parsedResp)
+    if err != nil {
+        http.Error(w, err.Error(), http.StatusServiceUnavailable)
+        return
+    }
 }
 
-func handleHTTPS(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(r)
+func (p *ProxyServer) handleHTTPS(w http.ResponseWriter, r *http.Request) {
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "Hijacking not supported", http.StatusInternalServerError)
@@ -152,27 +174,29 @@ func main() {
 	}
 
 	repository := repository.New(db)
+	proxyServer := &ProxyServer{
+		repository: repository,
+	}
 
 	server := &http.Server{
 		Addr: ":8081",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			scheme := "http"
 			if r.Method == http.MethodConnect {
-				handleHTTPS(w, r)
+				proxyServer.handleHTTPS(w, r)
+				scheme = "https"
 			} else {
-				handleHTTP(w, r)
+				proxyServer.handleHTTP(w, r)
 			}
 
-			parsedReq, err := proxy.ParseRequest(r)
+			parsedReq, err := proxy.ParseRequest(r, scheme)
 			if err != nil {
-				fmt.Println(1)
 				log.Println("failed parse request: %w", err)
 			}
 			err = repository.SaveRequest(parsedReq)
 			if err != nil {
-				fmt.Println(2)
 				log.Println("failed save request: %w", err)
 			}
-			fmt.Println(3, parsedReq)
 		}),
 	}
 

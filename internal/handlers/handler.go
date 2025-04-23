@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -32,7 +31,6 @@ func New(repo Repository) *Handler {
 }
 
 func (h *Handler) GetRequests(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("get request")
 	requests, err := h.repo.GetRequests()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -104,16 +102,16 @@ func (h *Handler) RepeatRequest(w http.ResponseWriter, r *http.Request) {
 
 func sendInjectedRequest(w http.ResponseWriter, req *proxy.ParsedRequest, response *http.Response) (bool, error) {
 	injectedRequest, err := proxy.BuildRequest(req)
-		if err != nil {
-			return false, err
-		}
+	if err != nil {
+		return false, err
+	}
 	injectedResponse, err := http.DefaultTransport.RoundTrip(injectedRequest)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return false, err
 	}
 
-	if injectedResponse.StatusCode != response.StatusCode {
+	if injectedResponse.StatusCode != response.StatusCode || injectedResponse.ContentLength != response.ContentLength {
 		return true, nil
 	}
 
@@ -157,19 +155,31 @@ func (h *Handler) ScanRequest(w http.ResponseWriter, r *http.Request) {
 		pathInjReq.Path += injection
 
 		cookiesInjReq := parsedRequest
-		for cookieKey := range cookiesInjReq.Cookies{
+		for cookieKey := range cookiesInjReq.Cookies {
 			cookiesInjReq.Cookies[cookieKey] += injection
 		}
 
 		headersInjReq := parsedRequest
-		for headerKey := range headersInjReq.Headers{
+		for headerKey := range headersInjReq.Headers {
 			if len(headersInjReq.Headers[headerKey]) > 0 {
 				lenHeaderVals := len(headersInjReq.Headers[headerKey])
-				headersInjReq.Headers[headerKey][lenHeaderVals - 1] += injection
+				headersInjReq.Headers[headerKey][lenHeaderVals-1] += injection
 			}
 		}
 
-		injectedRequests := []*proxy.ParsedRequest{pathInjReq, cookiesInjReq, headersInjReq}
+		getParamsInjReq := parsedRequest
+		for getParamKey := range getParamsInjReq.GetParams {
+			if len(getParamsInjReq.GetParams[getParamKey]) > 0 {
+				lenGetParams := len(getParamsInjReq.GetParams[getParamKey])
+				getParamsInjReq.GetParams[getParamKey][lenGetParams-1] += injection
+			}
+		}
+
+		postParamsInjReq := parsedRequest
+		postParamsInjReq.Body += injection
+
+		injectedRequests := []*proxy.ParsedRequest{pathInjReq, cookiesInjReq, headersInjReq, getParamsInjReq, postParamsInjReq}
+
 		for _, injectedReq := range injectedRequests {
 			isInjected, err := sendInjectedRequest(w, injectedReq, response)
 			if err != nil {

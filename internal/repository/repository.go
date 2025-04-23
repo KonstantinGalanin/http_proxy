@@ -9,9 +9,10 @@ import (
 )
 
 var (
-	InsertRequest = "INSERT INTO requests (method, path, host, get_params, headers, cookies, post_params, body) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
-	SelectRequests = "SELECT method, path, host, get_params, headers, cookies, post_params, body FROM requests"
-	SelectRequestByID = "SELECT method, path, host, get_params, headers, cookies, post_params, body FROM requests WHERE id = $1"
+	InsertRequest     = "INSERT INTO requests (scheme, method, path, host, get_params, headers, cookies, post_params, body) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
+	SelectRequests    = "SELECT scheme, method, path, host, get_params, headers, cookies, post_params, body FROM requests"
+	SelectRequestByID = "SELECT scheme, method, path, host, get_params, headers, cookies, post_params, body FROM requests WHERE id = $1"
+	InsertResponse    = "INSERT INTO responses (status_code, status, headers, body, content_length) VALUES ($1, $2, $3, $4, $5)"
 )
 
 type PostgresRepo struct {
@@ -45,7 +46,10 @@ func (p *PostgresRepo) SaveRequest(req *proxy.ParsedRequest) error {
 		return fmt.Errorf("failed to marshal post_params: %w", err)
 	}
 
+	fmt.Println(req.Scheme)
+
 	_, err = p.DB.Exec(InsertRequest,
+		req.Scheme,
 		req.Method,
 		req.Path,
 		req.Host,
@@ -62,7 +66,6 @@ func (p *PostgresRepo) SaveRequest(req *proxy.ParsedRequest) error {
 	return nil
 }
 
-
 func (p *PostgresRepo) GetRequests() ([]*proxy.ParsedRequest, error) {
 	rows, err := p.DB.Query(SelectRequests)
 	if err != nil {
@@ -74,11 +77,12 @@ func (p *PostgresRepo) GetRequests() ([]*proxy.ParsedRequest, error) {
 
 	for rows.Next() {
 		var (
-			method, path, host, body string
+			scheme, method, path, host, body                        string
 			headersJSON, cookiesJSON, getParamsJSON, postParamsJSON []byte
 		)
 
 		err := rows.Scan(
+			&scheme,
 			&method,
 			&path,
 			&host,
@@ -113,6 +117,7 @@ func (p *PostgresRepo) GetRequests() ([]*proxy.ParsedRequest, error) {
 		}
 
 		requests = append(requests, &proxy.ParsedRequest{
+			Scheme:     scheme,
 			Method:     method,
 			Path:       path,
 			Host:       host,
@@ -131,59 +136,77 @@ func (p *PostgresRepo) GetRequests() ([]*proxy.ParsedRequest, error) {
 	return requests, nil
 }
 
-
 func (p *PostgresRepo) GetRequestByID(id int) (*proxy.ParsedRequest, error) {
-    var (
-        method, path, host, body string
-        headersJSON, cookiesJSON, getParamsJSON, postParamsJSON []byte
-    )
+	var (
+		scheme, method, path, host, body                        string
+		headersJSON, cookiesJSON, getParamsJSON, postParamsJSON []byte
+	)
 
-    err := p.DB.QueryRow(SelectRequestByID, id).Scan(
-        &method,
-        &path,
-        &host,
-        &getParamsJSON,
-        &headersJSON,
-        &cookiesJSON,
-        &postParamsJSON,
-        &body,
-    )
-    
-    if err != nil {
-        if err == sql.ErrNoRows {
-            return nil, fmt.Errorf("request with ID %d not found", id)
-        }
-        return nil, fmt.Errorf("failed to get request by ID: %w", err)
-    }
+	err := p.DB.QueryRow(SelectRequestByID, id).Scan(
+		&scheme,
+		&method,
+		&path,
+		&host,
+		&getParamsJSON,
+		&headersJSON,
+		&cookiesJSON,
+		&postParamsJSON,
+		&body,
+	)
 
-    var headers map[string][]string
-    if err := json.Unmarshal(headersJSON, &headers); err != nil {
-        return nil, fmt.Errorf("failed to unmarshal headers: %w", err)
-    }
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("request with ID %d not found", id)
+		}
+		return nil, fmt.Errorf("failed to get request by ID: %w", err)
+	}
 
-    var cookies map[string]string
-    if err := json.Unmarshal(cookiesJSON, &cookies); err != nil {
-        return nil, fmt.Errorf("failed to unmarshal cookies: %w", err)
-    }
+	var headers map[string][]string
+	if err := json.Unmarshal(headersJSON, &headers); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal headers: %w", err)
+	}
 
-    var getParams map[string][]string
-    if err := json.Unmarshal(getParamsJSON, &getParams); err != nil {
-        return nil, fmt.Errorf("failed to unmarshal get_params: %w", err)
-    }
+	var cookies map[string]string
+	if err := json.Unmarshal(cookiesJSON, &cookies); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal cookies: %w", err)
+	}
 
-    var postParams map[string][]string
-    if err := json.Unmarshal(postParamsJSON, &postParams); err != nil {
-        return nil, fmt.Errorf("failed to unmarshal post_params: %w", err)
-    }
+	var getParams map[string][]string
+	if err := json.Unmarshal(getParamsJSON, &getParams); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal get_params: %w", err)
+	}
 
-    return &proxy.ParsedRequest{
-        Method:     method,
-        Path:       path,
-        Host:       host,
-        Headers:    headers,
-        Cookies:    cookies,
-        GetParams:  getParams,
-        PostParams: postParams,
-        Body:       body,
-    }, nil
+	var postParams map[string][]string
+	if err := json.Unmarshal(postParamsJSON, &postParams); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal post_params: %w", err)
+	}
+
+	return &proxy.ParsedRequest{
+		Scheme:     scheme,
+		Method:     method,
+		Path:       path,
+		Host:       host,
+		Headers:    headers,
+		Cookies:    cookies,
+		GetParams:  getParams,
+		PostParams: postParams,
+		Body:       body,
+	}, nil
+}
+
+func (p *PostgresRepo) SaveResponse(response *proxy.ParsedResponse) error {
+	headers, err := json.Marshal(response.Headers)
+	if err != nil {
+		return err
+	}
+
+	_, err = p.DB.Exec(
+		InsertResponse,
+		response.StatusCode,
+		response.Status,
+		headers,
+		response.Body,
+		response.ContentLength,
+	)
+	return err
 }

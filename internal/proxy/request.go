@@ -8,6 +8,7 @@ import (
 )
 
 type ParsedRequest struct {
+	Scheme     string              `json:"scheme"`
 	Method     string              `json:"method"`
 	Path       string              `json:"path"`
 	Host       string              `json:"host"`
@@ -18,13 +19,7 @@ type ParsedRequest struct {
 	Body       string              `json:"body"`
 }
 
-type ParsedResponse struct {
-	StatusCode int
-	Headers    http.Header
-	Body       []byte
-}
-
-func ParseRequest(r *http.Request) (*ParsedRequest, error) {
+func ParseRequest(r *http.Request, scheme string) (*ParsedRequest, error) {
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, err
@@ -43,6 +38,7 @@ func ParseRequest(r *http.Request) (*ParsedRequest, error) {
 	}
 
 	req := &ParsedRequest{
+		Scheme:     scheme,
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		Host:       r.Host,
@@ -57,55 +53,55 @@ func ParseRequest(r *http.Request) (*ParsedRequest, error) {
 }
 
 func BuildRequest(parsed *ParsedRequest) (*http.Request, error) {
-    u := &url.URL{
-		Scheme:   "http",
-        Path: parsed.Path,
-		Host: parsed.Host,
-    }
+	u := &url.URL{
+		Scheme: parsed.Scheme,
+		Path:   parsed.Path,
+		Host:   parsed.Host,
+	}
 
-    q := u.Query()
-    for key, values := range parsed.GetParams {
-        for _, value := range values {
-            q.Add(key, value)
-        }
-    }
-    u.RawQuery = q.Encode()
+	q := u.Query()
+	for key, values := range parsed.GetParams {
+		for _, value := range values {
+			q.Add(key, value)
+		}
+	}
+	u.RawQuery = q.Encode()
 
-    var body io.Reader
-    if parsed.Body != "" {
-        body = bytes.NewBufferString(parsed.Body)
-    }
-    
-    req, err := http.NewRequest(parsed.Method, u.String(), body)
-    if err != nil {
-        return nil, err
-    }
+	var body io.Reader
+	if parsed.Body != "" {
+		body = bytes.NewBufferString(parsed.Body)
+	}
 
-    req.Host = parsed.Host
+	req, err := http.NewRequest(parsed.Method, u.String(), body)
+	if err != nil {
+		return nil, err
+	}
 
-    for key, values := range parsed.Headers {
-        for _, value := range values {
-            req.Header.Add(key, value)
-        }
-    }
+	req.Host = parsed.Host
 
-    for name, value := range parsed.Cookies {
-        req.AddCookie(&http.Cookie{
-            Name:  name,
-            Value: value,
-        })
-    }
+	for key, values := range parsed.Headers {
+		for _, value := range values {
+			req.Header.Add(key, value)
+		}
+	}
 
-    if (parsed.Method == http.MethodPost || parsed.Method == http.MethodPut) && len(parsed.PostParams) > 0 {
-        form := make(url.Values)
-        for key, values := range parsed.PostParams {
-            for _, value := range values {
-                form.Add(key, value)
-            }
-        }
-        req.Body = io.NopCloser(bytes.NewBufferString(form.Encode()))
-        req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-    }
+	for name, value := range parsed.Cookies {
+		req.AddCookie(&http.Cookie{
+			Name:  name,
+			Value: value,
+		})
+	}
 
-    return req, nil
+	if (parsed.Method == http.MethodPost || parsed.Method == http.MethodPut) && len(parsed.PostParams) > 0 {
+		form := make(url.Values)
+		for key, values := range parsed.PostParams {
+			for _, value := range values {
+				form.Add(key, value)
+			}
+		}
+		req.Body = io.NopCloser(bytes.NewBufferString(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+
+	return req, nil
 }
